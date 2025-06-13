@@ -3,9 +3,14 @@ const User = require('../models/User');
 const mongoose = require('mongoose');
 const Repair = require('../models/Repair');
 
-// Use a more secure secret key
-const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(64).toString('hex');
-const TOKEN_EXPIRY = '24h';
+// Use environment variables for JWT configuration
+const JWT_SECRET = process.env.JWT_SECRET;
+const TOKEN_EXPIRY = process.env.JWT_EXPIRY || '24h';
+
+if (!JWT_SECRET) {
+    console.error('JWT_SECRET is not set in environment variables');
+    process.exit(1);
+}
 
 // Generate JWT token
 const generateToken = (user) => {

@@ -1,3 +1,18 @@
+// Load environment variables first
+require('dotenv').config();
+
+// Debug: Log environment variables (excluding sensitive data)
+console.log('Environment variables loaded:');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('PORT:', process.env.PORT);
+console.log('MONGODB_DB_NAME:', process.env.MONGODB_DB_NAME);
+console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
+console.log('JWT_EXPIRY:', process.env.JWT_EXPIRY);
+console.log('MAX_FILE_SIZE:', process.env.MAX_FILE_SIZE);
+console.log('UPLOAD_PATH:', process.env.UPLOAD_PATH);
+console.log('CORS_ORIGIN:', process.env.CORS_ORIGIN);
+
+// Then load other dependencies
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -8,20 +23,24 @@ const fs = require('fs');
 const User = require('./models/User');
 const { auth, authorize, generateToken, checkRepairOwnership } = require('./middleware/auth');
 const Repair = require('./models/Repair');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024; // 5MB default
+const UPLOAD_PATH = process.env.UPLOAD_PATH || 'public/uploads/';
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN || '*',
+    credentials: true
+}));
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
 // Multer configuration
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'public/uploads/');
+        cb(null, UPLOAD_PATH);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -41,7 +60,7 @@ const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: MAX_FILE_SIZE
     }
 });
 
@@ -426,10 +445,22 @@ app.delete('/api/repairs/:id', auth, authorize('admin'), async (req, res) => {
     }
 });
 
-// Stats route (admin only)
-app.get('/api/stats', auth, authorize('admin'), async (req, res) => {
+// Stats route (role-based)
+app.get('/api/stats', auth, async (req, res) => {
     try {
+        // Build query based on user role
+        let query = {};
+        if (req.user.role === 'customer') {
+            query.customerId = req.user._id;
+        } else if (req.user.role === 'technician') {
+            query.assignedTechnician = req.user.name;
+        }
+        // Admin users see all repairs (no query filter)
+
         const stats = await Repair.aggregate([
+            {
+                $match: query // Apply role-based filtering
+            },
             {
                 $group: {
                     _id: null,
@@ -456,6 +487,7 @@ app.get('/api/stats', auth, authorize('admin'), async (req, res) => {
         const monthlyStats = await Repair.aggregate([
             {
                 $match: {
+                    ...query, // Apply role-based filtering
                     createdDate: { $gte: sixMonthsAgo }
                 }
             },
@@ -479,14 +511,69 @@ app.get('/api/stats', auth, authorize('admin'), async (req, res) => {
             count: stat.count
         }));
 
+        // If no repairs found, return zeros
+        if (stats.length === 0) {
+            return res.json({
+                totalRepairs: 0,
+                totalEstimatedCost: 0,
+                totalActualCost: 0,
+                pendingCount: 0,
+                inProgressCount: 0,
+                completedCount: 0,
+                monthlyData: []
+            });
+        }
+
         res.json({
             ...stats[0],
             monthlyData
         });
     } catch (error) {
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error fetching stats:', error);
+        res.status(500).json({ error: 'Failed to fetch statistics' });
     }
 });
+
+// Development-only admin user creation endpoint
+if (process.env.NODE_ENV === 'development') {
+    app.post('/api/dev/create-admin', async (req, res) => {
+        try {
+            const { email, password, name } = req.body;
+            
+            // Check if admin already exists
+            const existingAdmin = await User.findOne({ role: 'admin' });
+            if (existingAdmin) {
+                return res.status(400).json({ 
+                    message: 'Admin user already exists',
+                    adminEmail: existingAdmin.email 
+                });
+            }
+
+            // Create admin user
+            const admin = new User({
+                email,
+                password,
+                name,
+                username: email.split('@')[0],
+                role: 'admin'
+            });
+
+            await admin.save();
+            console.log('Admin user created:', admin.email);
+
+            res.status(201).json({
+                message: 'Admin user created successfully',
+                user: admin.getPublicProfile()
+            });
+        } catch (error) {
+            console.error('Error creating admin:', error);
+            res.status(500).json({ 
+                error: 'Failed to create admin user',
+                details: error.message 
+            });
+        }
+    });
+}
 
 // Serve frontend
 app.get('/', (req, res) => {
@@ -494,9 +581,10 @@ app.get('/', (req, res) => {
 });
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://dumanmurat9:L4G3fx2CYd3Una36@cluster0.xzbrgw5.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
-    useUnifiedTopology: true
+    useUnifiedTopology: true,
+    dbName: process.env.MONGODB_DB_NAME
 })
 .then(() => {
     console.log('Connected to MongoDB');
@@ -504,6 +592,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://dumanmurat9:L4G3fx2CY
     // Start server only after successful database connection
     app.listen(PORT, () => {
         console.log(`Server is running on port ${PORT}`);
+        console.log(`Environment: ${process.env.NODE_ENV}`);
     });
 })
 .catch((error) => {

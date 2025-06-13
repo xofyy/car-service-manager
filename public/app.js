@@ -16,6 +16,10 @@ let restoreBtn;
 let imageUploadArea;
 let imageInput;
 let imagePreviewContainer;
+let sidebarToggle;
+let sidebar;
+let mainContent;
+let isInitialized = false; // Add flag to track initialization
 
 // Constants
 const STORAGE_KEY = 'carRepairData';
@@ -69,8 +73,63 @@ window.addEventListener('offline', () => {
 
 // Initialize DOM Elements
 function initializeDOMElements() {
+    if (isInitialized) {
+        console.log('DOM elements already initialized');
+        return;
+    }
+    
     console.log('Initializing DOM elements...');
     
+    // Sidebar elements
+    sidebarToggle = document.getElementById('sidebarToggle');
+    sidebar = document.querySelector('.sidebar');
+    mainContent = document.querySelector('.main-content');
+    
+    console.log('Sidebar elements:', {
+        toggle: sidebarToggle,
+        sidebar: sidebar,
+        mainContent: mainContent
+    });
+    
+    // Load saved sidebar state
+    const savedSidebarState = localStorage.getItem('sidebarCollapsed');
+    console.log('Saved sidebar state:', savedSidebarState);
+    
+    if (savedSidebarState === 'true') {
+        sidebar?.classList.add('collapsed');
+        mainContent?.classList.add('expanded');
+        console.log('Applied saved collapsed state');
+    }
+    
+    // Remove any existing event listeners
+    if (sidebarToggle) {
+        const newToggle = sidebarToggle.cloneNode(true);
+        sidebarToggle.parentNode.replaceChild(newToggle, sidebarToggle);
+        sidebarToggle = newToggle;
+        
+        // Add sidebar toggle event listener
+        sidebarToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Sidebar toggle clicked');
+            console.log('Before toggle - Sidebar classes:', sidebar?.classList.toString());
+            console.log('Before toggle - Main content classes:', mainContent?.classList.toString());
+            
+            sidebar?.classList.toggle('collapsed');
+            mainContent?.classList.toggle('expanded');
+            
+            console.log('After toggle - Sidebar classes:', sidebar?.classList.toString());
+            console.log('After toggle - Main content classes:', mainContent?.classList.toString());
+            
+            const isCollapsed = sidebar?.classList.contains('collapsed');
+            localStorage.setItem('sidebarCollapsed', isCollapsed);
+            console.log('Saved new sidebar state:', isCollapsed);
+        });
+    } else {
+        console.warn('Sidebar toggle button not found!');
+    }
+
+    isInitialized = true;
     // Get all required elements
     repairsList = document.getElementById('repairsTableBody');
     searchInput = document.getElementById('searchInput');
@@ -141,12 +200,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        // Debug: Log current user info
+        console.log('Current user info:', {
+            user: auth.user,
+            role: auth.user?.role,
+            isAdmin: auth.user?.role === 'admin'
+        });
+
         // Initialize DOM elements
         if (!initializeDOMElements()) {
             console.error('Failed to initialize DOM elements');
             UI.toast.show('Failed to initialize application', 'error');
             return;
         }
+        
+        // Initialize chart first
+        initializeChart();
         
         // Load initial data
         await loadRepairs();
@@ -259,45 +328,110 @@ function updateRepairsTable(repairs) {
 // Load Stats
 async function loadStats() {
     try {
-        const response = await fetch('/api/stats', {
-            headers: {
-                'Authorization': `Bearer ${auth.token}`
-            }
-        });
-
-        if (!response.ok) {
-            if (response.status === 401) {
-                throw { code: 'INVALID_TOKEN' };
-            }
-            throw new Error('Failed to fetch stats');
+        const statsSection = document.querySelector('.stats-section');
+        console.log('Stats section element:', statsSection);
+        
+        // Always show stats section
+        if (statsSection) {
+            console.log('Showing stats section');
+            statsSection.classList.remove('hidden');
         }
 
-        const stats = await response.json();
-        updateStatsDisplay(stats);
+        // Try to load stats data
+        try {
+            const response = await fetch('/api/stats', {
+                headers: {
+                    'Authorization': `Bearer ${auth.token}`
+                }
+            });
+
+            console.log('Stats API response:', {
+                status: response.status,
+                ok: response.ok,
+                statusText: response.statusText
+            });
+
+            if (response.ok) {
+                const stats = await response.json();
+                console.log('Stats data received:', stats);
+                updateStatsDisplay(stats);
+            } else {
+                // If we can't get stats, show zeros
+                console.log('Could not load stats, showing zeros');
+                updateStatsDisplay({
+                    totalRepairs: 0,
+                    pendingCount: 0,
+                    inProgressCount: 0,
+                    completedCount: 0,
+                    monthlyData: []
+                });
+            }
+        } catch (error) {
+            console.error('Error loading stats data:', error);
+            // Show zeros if we can't load stats
+            updateStatsDisplay({
+                totalRepairs: 0,
+                pendingCount: 0,
+                inProgressCount: 0,
+                completedCount: 0,
+                monthlyData: []
+            });
+        }
     } catch (error) {
-        console.error('Error loading stats:', error);
-        if (error.code === 'INVALID_TOKEN') {
-            throw error; // Let the caller handle auth errors
+        console.error('Error in loadStats:', error);
+        // Keep stats section visible even if there's an error
+        const statsSection = document.querySelector('.stats-section');
+        if (statsSection) {
+            statsSection.classList.remove('hidden');
         }
-        UI.toast.show('Failed to load statistics', 'error');
     }
 }
 
 // Update Stats Display
 function updateStatsDisplay(stats) {
+    console.log('Updating stats display with:', stats);
     if (!stats) {
-        console.warn('No stats data provided');
-        return;
+        console.warn('No stats data provided, using zeros');
+        stats = {
+            totalRepairs: 0,
+            pendingCount: 0,
+            inProgressCount: 0,
+            completedCount: 0,
+            monthlyData: []
+        };
     }
 
-    // Update stats display with server-provided stats
-    if (totalRepairsElement) totalRepairsElement.textContent = stats.totalRepairs || 0;
-    if (pendingRepairsElement) pendingRepairsElement.textContent = stats.pendingCount || 0;
-    if (inProgressRepairsElement) inProgressRepairsElement.textContent = stats.inProgressCount || 0;
-    if (completedRepairsElement) completedRepairsElement.textContent = stats.completedCount || 0;
+    // Update stats numbers
+    if (totalRepairsElement) {
+        console.log('Updating total repairs:', stats.totalRepairs);
+        totalRepairsElement.textContent = stats.totalRepairs || 0;
+    }
+    if (pendingRepairsElement) {
+        console.log('Updating pending repairs:', stats.pendingCount);
+        pendingRepairsElement.textContent = stats.pendingCount || 0;
+    }
+    if (inProgressRepairsElement) {
+        console.log('Updating in-progress repairs:', stats.inProgressCount);
+        inProgressRepairsElement.textContent = stats.inProgressCount || 0;
+    }
+    if (completedRepairsElement) {
+        console.log('Updating completed repairs:', stats.completedCount);
+        completedRepairsElement.textContent = stats.completedCount || 0;
+    }
 
-    // Update chart if it exists
+    // Initialize chart if it doesn't exist
+    if (!statusChart) {
+        console.log('Chart not initialized, initializing now');
+        initializeChart();
+    }
+
+    // Update chart data
     if (statusChart) {
+        console.log('Updating chart with new data:', {
+            pending: stats.pendingCount || 0,
+            inProgress: stats.inProgressCount || 0,
+            completed: stats.completedCount || 0
+        });
         statusChart.data.datasets[0].data = [
             stats.pendingCount || 0,
             stats.inProgressCount || 0,
@@ -308,6 +442,7 @@ function updateStatsDisplay(stats) {
 
     // Store current stats for other uses
     currentStats = stats;
+    console.log('Stats display updated successfully');
 }
 
 // Initialize Chart
@@ -320,25 +455,30 @@ function initializeChart() {
         return;
     }
 
+    // Destroy existing chart if it exists
+    if (statusChart) {
+        console.log('Destroying existing chart');
+        statusChart.destroy();
+    }
+
     try {
-        console.log('Chart canvas found, creating chart...');
-        repairsChartInstance = new Chart(ctx, {
-            type: 'doughnut',
+        console.log('Creating new chart...');
+        statusChart = new Chart(ctx, {
+            type: 'bar',
             data: {
-                labels: ['Total', 'Pending', 'In Progress', 'Completed'],
+                labels: ['Pending', 'In Progress', 'Completed'],
                 datasets: [{
-                    data: [0, 0, 0, 0],
+                    label: 'Repairs by Status',
+                    data: [0, 0, 0],
                     backgroundColor: [
-                        'rgba(54, 162, 235, 0.8)',
-                        'rgba(255, 206, 86, 0.8)',
-                        'rgba(255, 159, 64, 0.8)',
-                        'rgba(75, 192, 192, 0.8)'
+                        '#ffeeba', // Pending - yellow
+                        '#b8daff', // In Progress - blue
+                        '#c3e6cb'  // Completed - green
                     ],
                     borderColor: [
-                        'rgba(54, 162, 235, 1)',
-                        'rgba(255, 206, 86, 1)',
-                        'rgba(255, 159, 64, 1)',
-                        'rgba(75, 192, 192, 1)'
+                        '#856404', // Pending border
+                        '#004085', // In Progress border
+                        '#155724'  // Completed border
                     ],
                     borderWidth: 1
                 }]
@@ -346,9 +486,24 @@ function initializeChart() {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
                 plugins: {
                     legend: {
-                        position: 'bottom'
+                        display: false
+                    },
+                    title: {
+                        display: true,
+                        text: 'Repairs by Status',
+                        font: {
+                            size: 16
+                        }
                     }
                 }
             }
@@ -356,7 +511,6 @@ function initializeChart() {
         console.log('Chart initialized successfully');
     } catch (error) {
         console.error('Error initializing chart:', error);
-        throw error;
     }
 }
 
@@ -1093,14 +1247,14 @@ function initializeChart() {
                 label: 'Repairs by Status',
                 data: [0, 0, 0],
                 backgroundColor: [
-                    '#ffeeba', // Pending
-                    '#b8daff', // In Progress
-                    '#c3e6cb'  // Completed
+                    '#ffeeba', // Pending - yellow
+                    '#b8daff', // In Progress - blue
+                    '#c3e6cb'  // Completed - green
                 ],
                 borderColor: [
-                    '#856404',
-                    '#004085',
-                    '#155724'
+                    '#856404', // Pending border
+                    '#004085', // In Progress border
+                    '#155724'  // Completed border
                 ],
                 borderWidth: 1
             }]
